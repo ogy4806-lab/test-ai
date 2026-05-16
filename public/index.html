@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>计划任务 MVP</title>
+    <style>
+      body { font-family: Arial, sans-serif; max-width: 920px; margin: 30px auto; padding: 0 16px; }
+      .card { border: 1px solid #ddd; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+      input, textarea, select, button { margin: 6px 0; padding: 8px; }
+      input, textarea, select { width: 100%; box-sizing: border-box; }
+      .row { display: grid; grid-template-columns: 1fr 120px 180px; gap: 10px; }
+      ul { list-style: none; padding: 0; }
+      li { border: 1px solid #eee; border-radius: 6px; padding: 10px; margin: 8px 0; }
+      .done { opacity: 0.65; text-decoration: line-through; }
+      .actions button { margin-right: 8px; }
+      .muted { color: #666; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>计划任务网站（第一版）</h1>
+
+    <div class="card" id="authCard">
+      <h3>登录 / 注册</h3>
+      <input id="username" placeholder="用户名" />
+      <input id="password" type="password" placeholder="密码" />
+      <button onclick="register()">注册</button>
+      <button onclick="login()">登录</button>
+      <p id="authMsg"></p>
+    </div>
+
+    <div class="card" id="taskCard" style="display:none;">
+      <h3>新增任务</h3>
+      <input id="title" placeholder="任务标题" />
+      <textarea id="description" placeholder="任务描述"></textarea>
+      <div class="row">
+        <select id="priority">
+          <option value="low">低</option>
+          <option value="medium" selected>中</option>
+          <option value="high">高</option>
+        </select>
+        <input id="dueAt" type="datetime-local" />
+        <button onclick="createTask()">创建任务</button>
+      </div>
+
+      <h3>任务列表</h3>
+      <button onclick="loadTasks()">刷新</button>
+      <ul id="taskList"></ul>
+    </div>
+
+    <script>
+      let token = localStorage.getItem('token') || '';
+      const authMsg = document.getElementById('authMsg');
+
+      if (token) {
+        document.getElementById('taskCard').style.display = 'block';
+      }
+
+      async function register() {
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        authMsg.textContent = res.ok ? '注册成功，请登录' : data.error;
+      }
+
+      async function login() {
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        if (!res.ok) return authMsg.textContent = data.error;
+        token = data.token;
+        localStorage.setItem('token', token);
+        document.getElementById('taskCard').style.display = 'block';
+        authMsg.textContent = `登录成功：${data.username}`;
+        loadTasks();
+      }
+
+      async function createTask() {
+        const payload = {
+          title: document.getElementById('title').value,
+          description: document.getElementById('description').value,
+          priority: document.getElementById('priority').value,
+          due_at: document.getElementById('dueAt').value || null
+        };
+        const res = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          document.getElementById('title').value = '';
+          document.getElementById('description').value = '';
+          loadTasks();
+        }
+      }
+
+      async function loadTasks() {
+        const res = await fetch('/api/tasks', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const tasks = await res.json();
+        const ul = document.getElementById('taskList');
+        ul.innerHTML = '';
+        tasks.forEach(task => {
+          const li = document.createElement('li');
+          li.className = task.status === 'done' ? 'done' : '';
+          li.innerHTML = `
+            <strong>${task.title}</strong> [${task.priority}]<br>
+            <span>${task.description || ''}</span><br>
+            <span class="muted">截止：${task.due_at || '无'} | 状态：${task.status}</span>
+            <div class="actions">
+              <button onclick="toggleStatus(${task.id}, '${task.status}')">切换状态</button>
+              <button onclick="editTask(${task.id}, '${escapeHtml(task.title)}', '${escapeHtml(task.description||'')}', '${task.priority}', '${task.due_at || ''}')">编辑</button>
+              <button onclick="deleteTask(${task.id})">删除</button>
+            </div>
+          `;
+          ul.appendChild(li);
+        });
+      }
+
+      function escapeHtml(str) {
+        return String(str).replaceAll("'", '&#39;').replaceAll('"', '&quot;');
+      }
+
+      async function toggleStatus(id, current) {
+        const status = current === 'todo' ? 'done' : 'todo';
+        await fetch(`/api/tasks/${id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ status })
+        });
+        loadTasks();
+      }
+
+      async function editTask(id, title, description, priority, due_at) {
+        const nextTitle = prompt('新标题', title);
+        if (nextTitle === null) return;
+        const nextDesc = prompt('新描述', description);
+        if (nextDesc === null) return;
+        await fetch(`/api/tasks/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ title: nextTitle, description: nextDesc, priority, due_at: due_at || null })
+        });
+        loadTasks();
+      }
+
+      async function deleteTask(id) {
+        await fetch(`/api/tasks/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        loadTasks();
+      }
+
+      if (token) loadTasks();
+    </script>
+  </body>
+</html>
